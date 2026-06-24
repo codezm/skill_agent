@@ -98,6 +98,51 @@ def _safe_extract_zip(zip_path: Path, dest_dir: Path) -> None:
                 shutil.copyfileobj(src, dst)
 
 
+def _parse_frontmatter(content: str) -> dict[str, str]:
+    """从 SKILL.md 内容中解析 YAML frontmatter。
+    
+    格式示例:
+    ---
+    name: "问候助手"
+    description: "指导 Agent 礼貌性问候。"
+    ---
+    """
+    lines = content.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return {}
+    data: dict[str, str] = {}
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            data[key] = value
+    return data
+
+
+def _extract_skill_name_from_skill_md(skill_md_path: Path) -> str | None:
+    """从 SKILL.md 文件中提取技能名称。
+    
+    优先级：
+    1. 从 frontmatter 中的 name 字段提取
+    2. 如果不存在，返回 None
+    """
+    try:
+        with open(skill_md_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        meta = _parse_frontmatter(content)
+        name = meta.get("name")
+        if name:
+            return name.strip()
+    except Exception:
+        pass
+    return None
+
+
 def _find_skill_folders(extracted_root: Path) -> list[Path]:
     candidates: list[Path] = []
     for p in extracted_root.iterdir():
@@ -113,6 +158,26 @@ def _find_skill_folders(extracted_root: Path) -> list[Path]:
     if (extracted_root / "SKILL.md").is_file():
         return [extracted_root]
     return []
+
+
+def _get_skill_folder_name(folder: Path) -> str:
+    """获取技能文件夹应使用的名称。
+    
+    优先级：
+    1. 从 SKILL.md 的 frontmatter 中的 name 字段提取
+    2. 使用文件夹原始名称（作为备选）
+    """
+    skill_md = folder / "SKILL.md"
+    if skill_md.is_file():
+        extracted_name = _extract_skill_name_from_skill_md(skill_md)
+        if extracted_name:
+            # 清理文件夹名称
+            cleaned = re.sub(r"[<>:\"/\\\\|?*]+", "_", extracted_name).strip()
+            if cleaned:
+                return cleaned
+    
+    # 如果无法从 SKILL.md 提取，使用文件夹原始名称
+    return folder.name
 
 
 class TMTool(Tool):
@@ -193,9 +258,11 @@ class TMTool(Tool):
                         return
 
                     for folder in skill_folders:
-                        target = skills_dir / folder.name
+                        # 使用改进的方法获取技能文件夹名称，从 SKILL.md 的 frontmatter 中提取
+                        skill_name = _get_skill_folder_name(folder)
+                        target = skills_dir / skill_name
                         if target.exists():
-                            yield self.create_text_message(f"❌技能已存在：{folder.name}（请先删除同名技能）\n")
+                            yield self.create_text_message(f"❌技能已存在：{skill_name}（请先删除同名技能）\n")
                             return
                         try:
                             shutil.move(str(folder), str(target))
@@ -215,7 +282,7 @@ class TMTool(Tool):
             idx = int(m_del.group(1))
             skills = list_skills_sorted()
             if idx < 1 or idx > len(skills):
-                yield self.create_text_message("❌技能序号无效或超出范围。请先使用“查看技能”确认序号。\n")
+                yield self.create_text_message("❌技能序号无效或超出范围。请先使用"查看技能"确认序号。\n")
                 return
             target = skills[idx - 1]
             try:
@@ -237,7 +304,7 @@ class TMTool(Tool):
             idx = int(m_dl.group(1))
             skills = list_skills_sorted()
             if idx < 1 or idx > len(skills):
-                yield self.create_text_message("❌技能序号无效或超出范围。请先使用“查看技能”确认序号。\n")
+                yield self.create_text_message("❌技能序号无效或超出范围。请先使用"查看技能"确认序号。\n")
                 return
             target = skills[idx - 1]
 
